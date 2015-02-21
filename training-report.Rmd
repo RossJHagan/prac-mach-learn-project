@@ -1,0 +1,103 @@
+---
+title: "Training Report"
+author: "Ross J Hagan"
+date: "18 February 2015"
+output: html_document
+---
+
+```{r echo=TRUE, message=FALSE}
+library(caret)
+library(randomForest)
+library(rpart.plot)
+library(rattle)
+library(dplyr)
+```
+
+## Summary
+
+This analysis attempts to infer the quality of action taken by subjects in a sequence of actions based on measurements taken by various devices placed around the body.  We use random forests based off the numeric data to return a prediction of the classe of our test data.
+
+## Data Processing
+
+Having loaded our relevant libraries, we import the data with any empty values imputed with `NA` values.  There are, on inspection of the raw files, some columns with values of `#DIV/0!` which we account for in this step by replacing with `NA` values.
+
+```{r echo=TRUE}
+rawtraining <- read.csv("pml-training.csv", na.strings = c("", " ", "NA", "#DIV/0!"))
+testing  <- read.csv("pml-testing.csv", na.strings = c("", " ", "NA", "#DIV/0!"))
+```
+
+It is of note that the approach to be used in training will be a random forest approach and this will implicitly undertake cross-validation.  However, for the purposes of understanding we will use a hold out set approach and subset our training data set into one set with 75% of the data for training and the remainder for cross-validation.  The hold out set approach should give us a more conservative estimate for accuracy.
+
+As part of cleaning our data, we drop columns 1:7 which contain non-numeric or irrelevant columns for the purposes of our simple analysis.
+
+```{r echo=TRUE}
+inTrain <- createDataPartition(y=rawtraining$classe, p=0.75, list=FALSE)
+
+training <- rawtraining[inTrain,]
+training <- training[,-c(1:7)]
+xtrain   <- rawtraining[-inTrain,]
+xtrain   <- xtrain[,-c(1:7)]
+
+# apply the same drop of columns to final testing data
+testing  <- testing[,-c(1:7)]
+```
+
+Our next step is to determine the columns to be used from each set.  As we are interested in only those columns that are numeric and do not contain NA values, we apply the same function to each data set - testing, xtrain and training - to determine an index of columns to be dropped.  We then reintroduce the `classe` variable for our training and xtrain data sets.  For our testing and `xtrain` data set we perform an `na.roughfix` as this is also performed on our training data in the random forest process.
+
+```{r echo=TRUE}
+
+filterFn <- function (x) is.numeric(x) && !any(is.na(x))
+
+filterTrain <- sapply(training, filterFn)
+filteredTrain <- training[,filterTrain]
+filteredTrain <- mutate(filteredTrain, classe = training$classe)
+
+filterXtrain <- sapply(xtrain, filterFn)
+filteredXtrain <- xtrain[,filterXtrain]
+filteredXtrain <- mutate(filteredXtrain, classe = xtrain$classe)
+filteredXtrain <- na.roughfix(filteredXtrain)
+
+filterTest   <- sapply(testing, filterFn)
+filteredTest <- testing[,filterTest]
+filteredTest <- na.roughfix(filteredTest)
+```
+
+## Training and Prediction
+
+We undertake the training through the `randomForest` library's `randomForest` function.  We provide `classe` as the outcome, and use all other columns as predictors.  The ntree value is `1000` to improve accuracy.  Higher still would be better, but this proves more than sufficient for our purposes.  The training data is also run through an `na.roughfix` in order to eliminate `NA` values in the data.
+
+```{r echo=TRUE}
+set.seed(111)
+rfTraining <- randomForest(formula = classe ~ ., data = filteredTrain, ntree = 1000, na.action=na.roughfix)
+```
+
+We can now retrieve our predictions for the training set and the `xtrain` data set to be used for a simple cross-validation.
+
+```{r echo=TRUE}
+predictedTrain  <- predict(rfTraining, filteredTrain)
+trainConfMat    <- confusionMatrix(filteredTrain$classe, predictedTrain)
+```
+
+To cross validate we will predict on our `xtrain` data set and manually calculate the error rate.
+
+```{r echo=TRUE}
+predictedXtrain <- predict(rfTraining, filteredXtrain)
+xvalConfMat     <- confusionMatrix(filteredXtrain$classe, predictedXtrain)
+print(xvalConfMat$table)
+print(xvalConfMat$overall)
+xtrainConfDF    <- data.frame(rbind(xvalConfMat$overall))
+xErrRate        <- sum(predictedXtrain != filteredXtrain$classe) / length(filteredXtrain$classe)
+```
+
+#### Estimated Sample Error Rate
+
+We find an accuracy via the confusion matrix of `r round(xtrainConfDF$Accuracy, 3)` and calculate the estimated out of sample error rate to be `r round(xErrRate, 3)`%.  We can run our final prediction on the test set.
+
+```{r echo=TRUE}
+predictedTest <- predict(rfTraining, filteredTest)
+```
+
+This gives us a final result of `r predictedTest` as the predicted `classe` values for the test data.
+
+
+
